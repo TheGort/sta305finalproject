@@ -1,0 +1,414 @@
+---
+title: "STA305 Final Project - Technical Report"
+author: "Group 2"
+date: "14/08/2021"
+mainfont: Arial
+fontsize: 10pt
+geometry: margin=2.5cm
+output: 
+  bookdown::pdf_document2: 
+    latex_engine: xelatex
+    toc: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = "pipe")
+
+# Required packages
+library(pwr2)
+library(tidyverse)
+library(broom)
+library(xtable)
+library(knitr)
+
+# Function to convert fitted model to df with convenient col/rownames
+model_to_df <- function(model) {
+  df <- tidy(model) %>% as.data.frame
+  
+  # Use cleaned predictors names as dataframe row names
+  varnames <- df$term %>% 
+    lapply(function(x) gsub("[^A-Za-z0-9]", "", x)) # keep only alphanumeric chars in row names
+  rownames(df) <- varnames
+  df$term <- NULL
+  return(df)
+}
+
+# Function to add useful terms to a named list with its model.
+gen_model_summaries <- function(vec) {
+  # Pull out useful values from model summaries to data frame and to vec scope
+  vec$dataframe <- model_to_df(vec$model)
+  vec$modelsummary <- summary(vec$model)
+  vec$anovatable <- anova(vec$model) %>% as.data.frame
+  
+  return(vec)
+}
+
+# Loading in the data & attaching col vectors to global scope, rename "some" -> "medium"
+toiletPaperData <- read.csv("toilet_paper_data.csv") %>%
+  mutate(moisture = str_replace(moisture, "some", "medium"))
+
+# Force an order for the data variables
+toiletPaperData$moisture <- factor(toiletPaperData$moisture, levels=c("low", "medium", "high"))
+
+attach(toiletPaperData)
+```
+
+```{r model-fitting, echo=FALSE}
+# Model with interaction
+int <- list(model=lm(coins ~ brand * moisture))
+
+# Pull out useful values from model summaries to data frame and to object scope
+int <- gen_model_summaries(int)
+
+# Additive Model: model with main effects only
+additive <- list(model=lm(coins ~ brand + moisture))
+
+# Pull out useful values from model summaries to data frame and to object scope
+additive <- gen_model_summaries(additive)
+```
+
+# Objectives
+Through this experiment, we aim to determine:
+
+* Do toilet paper brands have different abilities to withstand stresses?
+* Does the wetness of toilet paper affect its durability?
+* Does the strength of toilet paper depend on the brands differently for different levels of wetness (and vice-versa)?
+
+# Variables
+
+We have two predictor variables:
+
+1) Toilet paper brand $(A, B, C, D, E)$ for (Cashmere, Charmin, Cottonelle, Kirkland, Royale) respectively. It is a factor (categorical predictor) with 5 levels.
+2) The amount of water applied to the toilet paper $(J, K, L)$ for (Low, Medium, High), respectively. It is a factor (categorical variable) that describes the amount of water that was applied to the toilet paper, with 3 levels: Low = 0.5mL, Medium = 1.0mL, High = 1.5mL.
+  
+Our response variable is the number of coins: a numerical, interval variable that describes the number of coins resting on the wet toilet paper before it breaks.
+
+Therefore, we treat Cashmere and Low as the baselines for each model, and there are a total of $5\times 3=15$ different treatments. Each of the treatments is possible and they all have the same number of combinations, making this a complete and balanced design where the factors are crossed.
+
+# Sample Size Calculation
+
+To determine the sample size necessary for the experiment, the `ss.2way` function from the `pwr2` R package will be used. The function has the following parameters: the number of groups in each factor, significance level chosen for the hypothesis test, desired power, and the effect sizes for the factors. Table \@ref(tab:samp-size) summarizes the values assigned to the function and the output sample size. The table also precedes the justification for the input. 
+
+```{r echo=FALSE}
+sample_size_calc = ss.2way(a=5, b=3, alpha=0.05, beta=1-0.8, f.A=0.25, f.B=0.25, B=4)
+ss_calc <- data.frame( c("Brand Groups", "Moisture Groups", "Significance Level", 
+                         "Power", "Effect size", "Group Size", "Total Sample"), 
+                       c(5,3,0.05,0.8,0.25,5,75), stringsAsFactors=FALSE)
+ss_calc <- data.frame(
+  c("Brand Groups", "Moisture Groups", "Significance Level", "Power", "Effect size", "Group Size", "Total Sample"), 
+  c(5,3,0.05,0.8,0.25,5,75), 
+  stringsAsFactors=FALSE
+)
+```
+
+```{r samp-size, echo=FALSE}
+kable(ss_calc, col.names = c("Variable", "Value"), caption="Sample Size Calculation")
+```
+
+* There are 5 groups in the brand factor (Cashmere, Charmin, Cottonelle, Kirkland, Royale) and there are 3 groups in the moisture factor (Low, Medium, high). 
+
+* The significance level chosen for the hypothesis test is 0.05. 
+
+* Since the purpose of this study was to understand the properties of various toilet paper products and inform future consumer choice, the ability to replicate the findings of this study is a key objective. As a result, a high power is necessary as it corresponds to a low probability of Type II error. Thus, the power was set to 0.8, or 80%.
+
+* In order to "fine tune" the experiment such that even relatively small effect gets detected, the effect size for each factor was set to 0.25. 
+
+# Checking ANOVA Assumptions
+
+In ANOVA, we need to check the five assumptions on the error terms before we can proceed with the analysis.
+
+## Independence
+
+The independence assumption ensures that a trial does not have any effect on another trial's response value. We take a look at the residuals versus fitted plot for the interaction and additive models, seen in Figure \@ref(fig:rvf-plots).
+
+```{r rvf-plots, fig.cap="Residuals vs. Fitted Plots", fig.height=4, echo = FALSE}
+par(mfrow=c(1, 2))
+
+plot(int$model, which = 1, main="Interaction Model")
+plot(additive$model, which = 1, main="Additive Model")
+```
+
+After having observed null plots and dispersed residuals (with the exception of notable points), there does not seem to be any violations of the independence assumption.
+
+## Identical Distribution (Within/Between groups) and Homogeneity of Variance
+
+We will assume that all trials in the same group will have the same distribution of $\epsilon_{ij}$'s. Due to the nature of this experiment, there is no reason to believe that the errors are correlated with each other, nor is there a time-dependent predictor. Also, our sample size is sufficiently large enough to affirm our assumption.
+
+Furthermore, to check the homogeneity of variances, we will use a scale-location plot for both interaction and additive models to observe the standardized residuals and the fitted values, seen in Figure \@ref(fig:sl-plots).
+
+```{r sl-plots, fig.cap="Scale-Location Plots", fig.height=4, echo = FALSE}
+par(mfrow=c(1, 2))
+
+plot(int$model, which=3, main="Interaction Model")
+plot(additive$model, which=3, main="Additive Model")
+```
+
+Again, there seems to be no pattern, along with the noteworthy points we saw earlier. Hence, we can assume homoscedasticity and proceed.
+
+## Normality
+
+Finally, we assess the normality of the errors by using a Q-Q plot and the Shapiro-Wilk test, seen in Figure \@ref(fig:qq-plots) and Table \@ref(tab:sw-tests).
+
+```{r qq-plots, fig.cap="QQ Plots", fig.height=3, echo = FALSE}
+par(mfrow=c(1, 2))
+
+plot(int$model, which=2)
+plot(additive$model, which=2)
+```
+
+```{r sw-tests, fig.cap="QQ Plots", fig.height=3, echo = FALSE}
+int$resid <- residuals(object = int$model)
+additive$resid <- residuals(object = additive$model)
+data.frame(
+  Interaction=shapiro.test(int$resid) %>% tidy %>% select(-method),
+  Additive=shapiro.test(additive$resid) %>% tidy %>% select(-method)
+) %>%
+  setNames(colnames(.) %>% lapply(function(x) gsub("\\.", " ", x))) %>% 
+  kable(caption="Interaction and Additive Model Shapiro-Wilk Tests")
+```
+
+Visually, almost all the points fall approximately on the normality line. In addition to this, we get a p-value of 0.291 and 0.4761 from the ANOVA residuals of the interaction and additive models respectively using the Shapiro-Wilk test. This is further evidence implying that normality is satisfied, since the distribution of the data are not statistically significant from a Normal distribution. 
+
+# Interaction Plot
+
+As seen in Figure \@ref(fig:interaction-plot), not all of the lines are parallel; notably, the lines between Cashmere and Charmin have wildly different slopes. However, none of them ever cross each other. More specifically, the line segment for the low moisture level in combination with the Cashmere brand on the interaction plot has a slope that is negative compared to the lines corresponding to the medium and high moisture levels. This indicates that there may be medium interaction between the low moisture level and the Cashmere brand of toilet paper. Furthermore, the three levels for the moisture factor always follow the order of: the toilet paper with low moisture having the greatest number of coins, followed by medium moisture, and finally high moisture, as expected. With these in mind, we use a two-way ANOVA F-test to determine whether the interaction effect is significant.
+
+```{r interaction-plot, fig.height=4, fig.cap="Interaction Plot for Brand and Moisture", echo=FALSE}
+interaction.plot(brand, moisture, coins,
+                 col=c("cyan", "darkorchid1", "blue"),
+                 lty=2,
+                 lwd=2,
+                 xlab="Brand Mean",
+                 ylab="Number of Coins")
+
+```
+
+\newpage
+
+# Interaction + Main Effects Model
+We define the following interaction model using dummy coding (for brevity, "interaction terms" is written "ITs" below):
+\begin{align*}
+    E(Y_i) = \beta_{0} &+\underbrace{\beta_1I_{B,i} +\beta_2I_{C,i} + \beta_3I_{D,i} + \beta_4I_{E,i}}_{\text{Terms for brands}} \\
+                     &+\underbrace{\beta_5I_{K,i} +\beta_6I_{L,i}}_{\text{Terms for water applied}} \\
+                     &+\underbrace{\beta_7(I_{B,i}\times I_{K,i}) +\beta_8(I_{B,i}\times I_{L,i})}_{\text{Charmin-(Med/High) ITs}} +\underbrace{\beta_9(I_{C,i}\times I_{K,i}) +\beta_{10}(I_{C,i}\times I_{L,i})}_{\text{Cottonelle ITs}} \\
+                     &+\underbrace{\beta_{11}(I_{D,i}\times I_{K,i}) +\beta_{12}(I_{D,i}\times I_{L,i})}_{\text{Kirkland-(Med/High) ITs}} +\underbrace{\beta_{13}(I_{E,i}\times I_{K,i}) +\beta_{14}(I_{E,i}\times I_{L,i})}_{\text{Royale-(Med/High) ITs}}+\epsilon_i
+\end{align*}
+where: 
+
+* The indicators $I_{a, i}$ where $a\in\underbrace{\{A,\dots,E\}}_{\text{brands}}\cup\underbrace{\{J,K,L\}}_{\text{moisture}}$ represent whether a treatment includes that factor level. For example, a treatment where Cottonelle is used and high moisture is applied would have $I_{C,i} = I_{K,i}=1$ and all other indicators equal to 0.
+* $\beta_0$ represents the mean number of coins supported for the baseline group: Cashmere toilet paper with low moisture (0.5mL applied)
+* $\beta_1, \dots, \beta_4$ each represent the mean increase in the number of coins for each brand (Charmin, Cottonelle, Kirkland, Royale, respectively) compared to the baseline group, with low moisture
+* $\beta_5, \beta_6$ each represent the mean increase in the number of coins for (medium moisture, high moisture respectively) compared to the baseline group, for Cashmere toilet paper.
+* $\beta_7, \dots, \beta_{14}$ are interaction terms that each represent the mean increase in the number of coins compared to the baseline group, allowing for both factors to vary. For example, if $I_{C,i} = I_{K,i}=1$, then the term with $\beta_9$ would be non-zero, corresponding to the mean increase from the baseline group for the treatment where Cottonelle is used and high moisture is applied.
+* $\epsilon_i\overset{iid}{\sim} \mathcal{N}(0, \sigma^2)$ is an error term
+
+To determine whether there are significant interactions between the brand and the amount of moisture on the number of coins that toilet paper can support, we perform the following hypothesis test:
+\begin{align*}
+  H_0 &: \beta_7 = \beta_8 = \beta_9 = \beta_{10} = \beta_{11} = \beta_{12} = \beta_{13} = \beta_{14} = 0 \\
+  H_A &: \text{at least one } \beta_i\neq 0 \text{ for } i\in\{7,\dots,14\}
+\end{align*}
+
+## Fitted Model
+
+A summary for the fitted interaction + main effects model is in Table \@ref(tab:int-model-summary).
+
+```{r int-model-summary, echo=FALSE}
+int$modelsummary %>% xtable %>% kable(caption="Interaction Model Summary")
+```
+```{r int-anova-table, echo=FALSE}
+int$anovatable %>% xtable %>% kable(caption="Interaction Model ANOVA Table")
+```
+
+## Hypothesis Testing - model with interaction & main effect
+
+We want to determine if there is a significant interaction effect between the toilet paper brands and the moisture levels on the number of coins that the toilet paper can support. That is, we want to perform the hypothesis test: 
+\begin{align*}
+  H_0 &: \beta_7 = \beta_8 = \beta_9 = \beta_{10} = \beta_{11} = \beta_{12} = \beta_{13} = \beta_{14} = 0 \\
+  H_A &: \text{at least one } \beta_i\neq 0 \text{ for } i\in\{7,\dots,14\}
+\end{align*}
+
+From the ANOVA table of the interaction model (Table \@ref(tab:int-anova-table)), we compute the test statistic \newline
+$F={\frac{MS\text{ } brand:moisture}{MS \text{ } Residuals}}=\ 
+  \frac{`r int$anovatable["brand:moisture", "Mean Sq"]`}{`r int$anovatable["Residuals", "Mean Sq"]`} \
+  \approx `r (int$anovatable["brand:moisture", "Mean Sq"]/int$anovatable["Residuals", "Mean Sq"]) %>% format(digits=3)`$.
+
+We want to compare this to the distribution of $F_{8,60}$ since we are testing 8 coefficients and the degrees of freedom of error for the full model (Table \@ref(tab:int-anova-table)) is 60.
+
+Assuming the null hypothesis, we get a $p$-value of $P(F_{
+  `r int$anovatable["brand:moisture", "Df"]`, `r int$anovatable["Residuals", "Df"]`
+} > 
+  `r int$anovatable["brand:moisture", "Mean Sq"]/int$anovatable["Residuals", "Mean Sq"]`
+) = `r 1-pf(int$anovatable["brand:moisture", "Mean Sq"]/int$anovatable["Residuals", "Mean Sq"], int$anovatable["brand:moisture", "Df"], int$anovatable["Residuals", "Df"])`$.
+
+At 5% significance level, we fail to reject $H_0$: there is insufficient evidence to conclude that the effect of brand on coins varies by moisture level.
+
+In other words, there is no significant interaction effects between the toilet paper brands and the moisture levels on the number of coins that the toilet paper can support. Thus, we can fit the simpler additive model, which only includes the main effects, as our final model.
+
+# Additive Model
+
+We define the following additive model using dummy coding:
+\begin{align*}
+    E(Y_i) = \beta_{0} &+\underbrace{\beta_1I_{B,i} +\beta_2I_{C,i} + \beta_3I_{D,i} + \beta_4I_{E,i}}_{\text{Terms for brands}} \\
+                     &+\underbrace{\beta_5I_{K,i} +\beta_6I_{L,i}}_{\text{Terms for water applied}} +\epsilon_i
+\end{align*}
+where the terms are the same as in the interaction model, but without the interaction terms: 
+
+* The indicators $I_{a, i}$ where $a\in\{A,\dots,E\}\cup\{J,K,L\}$ represent whether a treatment includes that factor level. For example, a treatment where Cottonelle is used and high moisture is applied would have $I_{C,i} = I_{K,i}=1$ and all other indicators equal to 0.
+* $\beta_0$ represents the mean number of coins supported for the baseline group: Cashmere toilet paper with low moisture (0.5mL applied)
+* $\beta_1, \dots, \beta_4$ each represent the mean increase in the number of coins for each brand (Charmin, Cottonelle, Kirkland, Royale, respectively) compared to the baseline group, with low moisture
+* $\beta_5, \beta_6$ each represent the mean increase in the number of coins for (medium moisture, high moisture respectively) compared to the baseline group, for Cashmere toilet paper.
+* $\epsilon_i\overset{iid}{\sim} \mathcal{N}(0, \sigma^2)$ is an error term
+
+To determine whether each factor has significant effects on the number of coins that the toilet paper can support while holding the other fixed, we perform the following hypothesis tests:
+
+* Brand Effect
+\begin{align*}
+  H_0 &: \beta_1 = \beta_2 = \beta_3 = \beta_{4} = 0 \\
+  H_A &: \text{at least one } \beta_i\neq 0 \text{ for } i\in\{1,\dots,4\}
+\end{align*}
+* Moisture Effect
+\begin{align*}
+  H_0 &: \beta_5 = \beta_6 = 0 \\
+  H_A &: \text{at least one } \beta_i\neq 0 \text{ for } i\in\{5,6\}
+\end{align*}
+
+## Fitted Model
+
+A summary for the fitted additive model is in Table \@ref(tab:add-model-summary).
+
+```{r add-model-summary, echo=FALSE}
+additive$modelsummary %>% xtable %>% kable(caption="Additive Model Summary")
+```
+```{r add-anova-table, echo=FALSE}
+additive$anovatable %>% xtable %>% kable(caption="Additive Model ANOVA Table", digits=10)
+```
+
+## Hypothesis Testing - additive model, brand effect
+
+From the ANOVA table of the additive model (Table \@ref(tab:add-anova-table)), we compute the test statistic \newline
+$F={\frac{MS\text{ } brand}{MSE}}=
+  \frac{`r additive$anovatable["brand", "Mean Sq"]`}{`r additive$anovatable["Residuals", "Mean Sq"]`}
+  \approx `r (additive$anovatable["brand", "Mean Sq"]/additive$anovatable["Residuals", "Mean Sq"]) %>% round(digits=3)`$.
+
+Assuming the null hypothesis, we get a $p$-value of $P(F_{
+  `r additive$anovatable["brand", "Df"]`, `r additive$anovatable["Residuals", "Df"]`
+} > 
+  `r additive$anovatable["brand", "Mean Sq"]/additive$anovatable["Residuals", "Mean Sq"]`
+) = `r 1-pf(additive$anovatable["brand", "Mean Sq"]/additive$anovatable["Residuals", "Mean Sq"], additive$anovatable["brand", "Df"], additive$anovatable["Residuals", "Df"])`$.
+
+At a 5% significance level, we reject $H_0$: strong evidence to conclude that brand affects coins when controlling for moisture level. (i.e., # coins supported vary from one brand to another within the same moisture level)
+
+## Hypothesis Testing - additive model, moisture effect
+
+From the ANOVA table of the additive model (Table \@ref(tab:add-anova-table)), we compute the test statistic \newline
+$F={\frac{MS\text{ } Moisture}{MSE}}=
+  \frac{`r additive$anovatable["moisture", "Mean Sq"]`}{`r additive$anovatable["Residuals", "Mean Sq"]`}
+  \approx `r (additive$anovatable["moisture", "Mean Sq"]/additive$anovatable["Residuals", "Mean Sq"]) %>% round(digits=3)`$.
+
+Assuming the null hypothesis, we get a $p$-value of $P(F_{
+  `r additive$anovatable["moisture", "Df"]`, `r additive$anovatable["Residuals", "Df"]`
+} > 
+  `r additive$anovatable["moisture", "Mean Sq"]/additive$anovatable["Residuals", "Mean Sq"]`
+) = `r (1-pf(additive$anovatable["moisture", "Mean Sq"]/additive$anovatable["Residuals", "Mean Sq"], additive$anovatable["moisture", "Df"], additive$anovatable["Residuals", "Df"])) %>% signif(digits=4)`$.
+
+At a 5% significance level, we reject $H_0$: strong evidence to conclude that moisture level affects coins when controlling for brand.
+
+# Conclusion
+
+In summary, the main purpose of this report was to find out whether or not toilet paper brands and/or different levels of moisture affect the strength of toilet paper, as well as noting any interactions between the two factors. After observing our interaction plot, model summary, and ANOVA table, we found that there was inconclusive evidence to show a significant effect between the toilet paper brands and the moisture levels on the number of coins the toilet paper can support. 
+
+With this first conclusion in mind, we then looked at the plain additive model and focused on the main effects. We concluded that each factor (while holding the other factor constant) had a statistically significant effect on the number of coins supported, at the 5% benchmark significance level.
+
+# Appendix - R code
+
+## Sample size calculation
+```{r eval=FALSE}
+sample_size_calc = ss.2way(a=5, b=3, alpha=0.05, beta=1-0.8, f.A=0.25, f.B=0.25, B=4)
+```
+
+## Interaction plot
+```{r eval=FALSE}
+interaction.plot(brand, moisture, coins,
+                 col=c("cyan", "darkorchid1", "blue"),
+                 lty=2,
+                 lwd=2,
+                 xlab="Brand Mean",
+                 ylab="Number of Coins")
+```
+
+## Model generation
+
+```{r eval=FALSE}
+# Function to convert fitted model to df with convenient col/rownames
+model_to_df <- function(model) {
+  df <- tidy(model) %>% as.data.frame
+  
+  # Use cleaned predictors names as dataframe row names
+  varnames <- df$term %>% 
+    lapply(function(x) gsub("[^A-Za-z0-9]", "", x)) # keep only alphanumeric chars in row names
+  rownames(df) <- varnames
+  df$term <- NULL
+  return(df)
+}
+
+# Function to add useful terms to a named list with its model.
+gen_model_summaries <- function(vec) {
+  # Pull out useful values from model summaries to data frame and to vec scope
+  vec$dataframe <- model_to_df(vec$model)
+  vec$modelsummary <- summary(vec$model)
+  vec$anovatable <- anova(vec$model) %>% as.data.frame
+  
+  return(vec)
+}
+
+# Loading in the data & attaching col vectors to global scope, rename "some" -> "medium"
+toiletPaperData <- read.csv("toilet_paper_data.csv") %>%
+  mutate(moisture = str_replace(moisture, "some", "medium"))
+  replace("some", "medium")
+attach(toiletPaperData)
+
+# Force an order for the data variables
+toiletPaperData$moisture <- factor(toiletPaperData$moisture, levels=c("low", "medium", "high"))
+
+# Model with interaction
+int <- list(model=lm(coins ~ brand * moisture))
+
+# Pull out useful values from model summaries to data frame and to object scope
+int <- gen_model_summaries(int)
+
+# Additive Model: model with main effects only
+additive <- list(model=lm(coins ~ brand + moisture))
+
+# Pull out useful values from model summaries to data frame and to object scope
+additive <- gen_model_summaries(additive)
+
+```
+
+## Assessing Model Assumptions
+```{r eval=FALSE}
+# Assessing independence of the error terms using residual vs fitted plots
+par(mfrow=c(1, 2))
+plot(int$model, which = 1, main="Interaction Model")
+plot(additive$model, which = 1, main="Additive Model")
+
+# Assessing identical distribution of the error terms using scale-location plots
+par(mfrow=c(1, 2))
+plot(int$model, which=3, main="Interaction Model")
+plot(additive$model, which=3, main="Additive Model")
+
+# Assessing normality of the error terms using QQ plots
+par(mfrow=c(1, 2))
+plot(int$model, which=2)
+plot(additive$model, which=2)
+
+# Assessing normality of the error terms using Shapiro-Wilk tests
+int$resid <- residuals(object = int$model)
+additive$resid <- residuals(object = additive$model)
+data.frame(
+  Interaction=shapiro.test(int$resid) %>% tidy %>% select(-method),
+  Additive=shapiro.test(additive$resid) %>% tidy %>% select(-method)
+) %>%
+  setNames(colnames(.) %>% lapply(function(x) gsub("\\.", " ", x))) %>% 
+  kable(caption="Interaction and Additive Model Shapiro-Wilk Tests")
+```
